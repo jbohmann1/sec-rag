@@ -24,7 +24,7 @@ HEADERS = {"User-Agent": USER_AGENT}
 
 # ---------------------------------------------------------------- config ---
 TICKERS = [
-    "AAPL", "MSFT", "INTC", "WDAY",              # tech
+    "AAPL", "MSFT", "TXN", "WDAY",                # tech
     "JPM", "BAC", "GS", "CFG",                   # banking
     "WMT", "COST", "DG", "ROST",                 # retail
     "XOM", "COP", "DVN", "MPC",                  # energy
