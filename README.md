@@ -4,6 +4,7 @@ Measured investigation into what makes retrieval work on messy financial documen
 ## Scope
 - **Companies:** 24 across 6 sectors (see table below)
 - **Period selection rule:** for each company, take the three most recent 10-Ks whose fiscal period ends on or before 2025-12-31. The rule is based on the period-end date, not a fiscal-year label, because companies label years differently (see rationale below).
+- **10-K/A check:** 10-K/A amendments were deliberately excluded from the download (Step 1.2). Checked whether any exist whose period overlaps a selected 10-K, across the dev subset (AAPL, JPM, WMT, XOM, DG, EA, ACM): none do — every 10-K/A found for these companies predates FY2023 (as far back as the 1990s), except EA's FY2026 10-K/A (filed due to its going-private deal), which falls outside the selected FY2023-2025 window anyway. No special handling needed.
 - **Form types:**
   - 10-K (annual report): 24 companies x 3 filings = 72 filings
   - 10-Q (quarterly report): the three most recent 10-Qs for the dev subset only = 21 filings
