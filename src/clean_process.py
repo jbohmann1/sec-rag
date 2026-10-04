@@ -242,17 +242,26 @@ def looks_like_toc(text, threshold=0.5, min_lines=3):
     return (hits / len(lines)) >= threshold
 
 
-def dedupe_short_duplicates(sections, min_len=150):
+def dedupe_short_duplicates(sections):
     """When the same raw item_id appears more than once within one document,
     it's almost always a TOC row or a stray duplicate heading match, not a
-    second real section -- a real section is followed by substantial body
-    text, while a TOC/stray entry either has very little text before the
-    next heading, or (JPM, WMT) is a dense outline of sub-heading/page-number
-    lines. Drop occurrences that are short OR TOC-shaped, as long as at
-    least one occurrence survives. Legitimate 10-Q Part I/Part II reuse (two
-    substantial, prose-shaped "Item 1" sections) survives both checks; a
-    single genuinely short section (e.g. "Item 9. None.") survives because
-    it has no competing duplicate.
+    second real section -- a TOC/stray entry (JPM, WMT) is a dense outline
+    of sub-heading/page-number lines. Drop occurrences that are TOC-shaped,
+    as long as at least one occurrence survives.
+
+    Deliberately NOT length-based anymore: an earlier version also dropped
+    anything under 150 chars, on the assumption a short duplicate must be a
+    fake. That's false for 10-Qs specifically -- Part I and Part II
+    legitimately reuse Items 1-4 with UNRELATED content (Issue 2), and
+    Part II's version of Items 3/4 ("Defaults Upon Senior Securities",
+    "Mine Safety Disclosures") is almost always a genuine one-liner like
+    "None." The length check silently discarded these real disclosures
+    whenever Part I's version of the same raw id was long, which is most of
+    the time. TOC-shape detection alone covers every case this function was
+    actually built for (JPM's outline-style TOC); WMT's cross-reference case
+    is caught upstream by is_standalone() before a section is ever created,
+    not by this function at all -- so dropping the length check doesn't
+    reopen that fix.
     """
     groups = defaultdict(list)
     for i, sec in enumerate(sections):
@@ -263,8 +272,7 @@ def dedupe_short_duplicates(sections, min_len=150):
         if len(indices) == 1:
             keep.add(indices[0])
             continue
-        good = [i for i in indices
-                if len(sections[i][2]) >= min_len and not looks_like_toc(sections[i][2])]
+        good = [i for i in indices if not looks_like_toc(sections[i][2])]
         for i in (good or indices):  # keep at least one if all look bad
             keep.add(i)
 

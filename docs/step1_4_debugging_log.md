@@ -324,6 +324,85 @@ JPM is in the dev subset and not easily swapped the way INTC was, and no
 heading-detection approach can split content that was never labeled in the
 source document.
 
+## Issue 15 — dedup's length threshold silently dropped legitimate short Part II 10-Q items
+
+**Found during:** continued report-back scrutiny of Issue 14 (the JPM 10-Q
+gap). Before accepting "Item 5 is legitimately short, same mechanism as
+ACM/EA" at face value for the one non-JPM filing missing `II-5`, checked the
+actual pre-filter content directly rather than assuming -- which surfaced a
+second, more serious problem sitting right next to it: the same filing
+(AAPL's 2025-03-29 10-Q) was *also* missing `II-3` and `II-4` entirely, not
+merely filtered for length like `II-5` was.
+
+**Investigation:** `II-5`'s raw text (`"Insider Trading Arrangements\nNone."`,
+34 chars) confirmed the ACM/EA-style short-content mechanism correctly for
+that one item. But `II-3`/`II-4` weren't in the dropped-for-length list at
+all -- they were simply absent, despite `II-1`, `II-1A`, `II-2`, and `II-6`
+all existing correctly in the same filing, ruling out a general Part II
+detection failure. A direct search of the raw HTML found both real headings
+("Item 3. Defaults Upon Senior Securities", "Item 4. Mine Safety
+Disclosures") present, bold, standalone, outside any table -- exactly the
+pattern that should detect cleanly.
+
+**Root cause:** raw item id "3" legitimately occurs twice in every 10-Q --
+Part I's "Quantitative and Qualitative Disclosures About Market Risk"
+(substantial, a few hundred chars) and Part II's "Defaults Upon Senior
+Securities" (almost always a one-liner like "None.", since virtually no
+company has an actual default to report). Same for raw id "4" (Part I's
+"Controls and Procedures" vs. Part II's "Mine Safety Disclosures", similarly
+almost always "Not applicable."). Issue 10's `dedupe_short_duplicates` kept
+only occurrences that were both long enough (>=150 chars) AND not
+TOC-shaped, discarding the rest -- validated at the time only against raw
+id "1", where both Part I's and Part II's versions tend to be substantial.
+That validation never extended to ids "2"/"3"/"4", where Part II's version
+is typically a genuine short one-liner. The function was treating "this
+occurrence is short" as proof of "this occurrence is a fake duplicate,"
+which is false specifically for 10-Q Part I/Part II reuse (Issue 2) --
+discarding real content, not spurious matches.
+
+**Fix:** removed the length-based component of `dedupe_short_duplicates`
+entirely, keeping only the TOC-shape check. Confirmed every previously-fixed
+case still holds without it: JPM's dense outline-style TOC (the case this
+function was originally built for) is still caught by `looks_like_toc()`
+alone; WMT's cross-reference duplicates were never handled by this function
+at all -- they're excluded upstream by `is_standalone()` during heading
+detection (Issue 9), before a section is ever created, so dropping the
+length check doesn't reopen that fix. Verified with a synthetic test
+matching AAPL's real structure (Part I's substantial Items 3/4 alongside
+Part II's one-line "None."/"Not applicable." versions): both occurrences of
+each now survive. Re-verified the JPM TOC case still correctly collapses to
+one occurrence. Re-ran against the real AAPL 10-K with no regression (same
+19 records as every prior check).
+
+**Scope, measured rather than assumed:** re-ran the full corpus after the
+fix. Final record count (1607) and every affected `item_id` count (`I-3`,
+`I-4`, `II-5`, `II-6`) were **identical** before and after -- `II-3` and
+`II-4` still don't appear anywhere in the breakdown. Traced AAPL's filing
+through the pipeline stage by stage to understand why: the fix works
+exactly as intended -- both `II-3` and `II-4` now correctly survive dedup
+and Part-assignment, confirmed directly (`'II-3'` and `'II-4'` present in
+the final item_id list). But `main()` has its own, separate, already-
+documented minimum-content filter (`len(cleaned) < 50`, the same mechanism
+behind the ACM/EA Item-2 and AAPL `II-5` cases), and it independently
+catches these same records anyway: Part II's "Defaults Upon Senior
+Securities" is literally `"None."` (5 chars), "Mine Safety Disclosures" is
+`"Not applicable."` (15 chars) -- both genuinely trivial. So for every case
+that actually exists in this corpus, the broken dedup mechanism and the
+correct one happened to agree on the final output, just for the wrong
+reason beforehand. **The fix was still necessary and correct** -- it
+repairs a logically broken assumption ("shorter than the other occurrence
+of the same raw id" is not valid evidence of "fake duplicate" for 10-Q
+Part I/II reuse) that would silently drop real content in any future or
+differently-worded filing where Part II's one-liner happens to land between
+50 and the old 150-char threshold (e.g. a fuller sentence like "The Company
+did not sell any unregistered securities during the quarter covered by
+this report." instead of a bare "None."). It just turns out no company in
+*this specific* 93-filing corpus phrases these items that way -- confirmed
+for AAPL directly; the same stock-phrase pattern ("None."/"Not applicable.")
+is the overwhelmingly common convention across filers for these items, making
+the same zero-net-effect outcome likely but not individually re-verified
+for all 18 non-JPM 10-Qs.
+
 ## Final verification
 
 After all fixes, `I-1` appeared in exactly 84 of 93 filings — matching the
@@ -354,3 +433,4 @@ computed expectation, not by assuming a clean run meant a correct one.
 | JPM (multi-table sections) | Boilerplate stripper removed real structural markers | `[TABLE]`/`[/TABLE]` repeat often enough to trip the frequency rule | Exempted these two literal strings from stripping |
 | 10-K vs 10-Q, Items 5 & 6 | Two unrelated disclosures sharing one `item_id` | `II-` prefix used by both 10-K Part II (5-9C) and 10-Q Part II (1-6) — overlap at 5/6 | Namespaced `item_id` by form (`10-K:II-5` vs `10-Q:II-5`) |
 | JPM (10-Q only) | Part II mislabeled as Part I for 3 filings | Never restates Part I's "Item 1"/"Item 2" inline, so the occurrence-counting trigger never fires | Documented as a known limitation (unfixable, not detection bug) — affected content absorbed into FRONT |
+| 10-Qs, Part II Items 3/4 | Dedup logic was broken (zero net effect on this corpus, confirmed by re-run) | Length threshold assumed "short duplicate = fake," false for 10-Q Part I/II reuse; main()'s separate 50-char filter independently caught the same trivial one-liners anyway | Removed the length check from `dedupe_short_duplicates`, keeping only TOC-shape detection -- correctness fix, not a corpus-changing one |

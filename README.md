@@ -172,6 +172,27 @@ own records. **Documented rather than fixed**, since JPM is in the dev
 subset and not easily swapped the way INTC was, and no heading-detection
 approach can split content that source document never labeled.
 
+**Dedup logic fix, verified to have zero net effect on this corpus (by
+design, not by luck).** Investigating a 4th 10-Q missing `II-5` (beyond
+JPM's 3, explained by the limitation above) surfaced a genuine bug in the
+Issue-10 dedup logic: it assumed a shorter occurrence of the same raw
+`item_id` must be a fake duplicate, which is false for 10-Q Part I/Part II
+reuse specifically — Part II's versions of Items 3/4 ("Defaults Upon Senior
+Securities", "Mine Safety Disclosures") are almost always genuine one-line
+disclosures ("None.", "Not applicable."), not fakes. Fixed by removing the
+length-based component, keeping only TOC-shape detection (confirmed every
+previously-fixed case still holds without it). Re-ran the full corpus:
+total records (1607) and every affected count were **identical** before and
+after. Traced this precisely rather than assuming it meant nothing changed:
+the fix does work exactly as intended (`II-3`/`II-4` now correctly survive
+dedup and Part-assignment), but `main()`'s own separate, already-documented
+minimum-content filter independently catches the same trivial one-liners
+anyway, so the final output is unchanged for this specific corpus. The fix
+was still necessary — it corrects a logically broken assumption that would
+silently drop real content in any filing where Part II's one-liner happens
+to be longer than 50 characters but shorter than the old 150-character
+threshold, which just doesn't occur among this corpus's 93 filings.
+
 ## Status
 Week 1, Step 1.4 - complete. All report-back checklist items answered: runs
 cleanly on all 93 filings, one row per section, boilerplate/near-duplicate
@@ -181,5 +202,9 @@ record captured, I-2 gap explained (known short-section-drop behavior, not
 a new bug), the `II-5`/`II-6` form-collision schema ambiguity found and
 fixed via form-namespaced `item_id` (verified against real data), and
 JPM's 10-Q Part I gap investigated and documented as a known, unfixable
-limitation (3 filings, content absorbed into FRONT rather than lost).
-Full debugging narrative for all 14 issues found: `docs/step1_4_debugging_log.md`.
+limitation (3 filings, content absorbed into FRONT rather than lost), and a
+genuine dedup-logic bug found and fixed (verified to have zero net effect
+on this corpus's final output, confirmed rather than assumed, by tracing
+the exact pipeline stage where the separate 50-char filter independently
+catches the same trivial content).
+Full debugging narrative for all 15 issues found: `docs/step1_4_debugging_log.md`.
