@@ -408,7 +408,13 @@ def main():
                 "filing_date": row["filing_date"],
                 "report_date": row["report_date"],
                 "accession": row["accession"],
-                "item_id": item_id,
+                # Namespaced by form: 10-K Part II (Items 5-9C) and 10-Q Part II
+                # (Items 1-6, since Part II renumbers from 1) both use the "II-"
+                # prefix, colliding at II-5/II-6 -- two unrelated disclosure types
+                # sharing one id. Prefixing by form makes item_id unambiguous on
+                # its own, rather than relying on every downstream script to also
+                # filter on the form column.
+                "item_id": f"{row['form']}:{item_id}",
                 "item_title": item_title,
                 "text": cleaned,
                 "char_count": len(cleaned),

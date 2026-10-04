@@ -233,6 +233,97 @@ preserved in extracted text. **Decision: swap INTC out of the corpus** (Texas
 Instruments, TXN, replaces it) rather than build one-off infrastructure for a
 single filer.
 
+## Issue 12 — Boilerplate stripper was eating our own [TABLE]/[/TABLE] markers
+
+**Found during:** report-back review, item 5 (false-positive boilerplate
+check), run against real long sections across AAPL, JPM, GS, RBLX, COST.
+
+**Symptom:** AAPL's Item 1A was clean (no legitimately-repeated subheading
+wrongly dropped — the original worry). But JPM's multi-table sections showed
+`x10: '[TABLE]'` and `x10: '[/TABLE]'` in the stripped-lines list.
+
+**Root cause:** `[TABLE]`/`[/TABLE]` are the pipeline's own structural
+markers (inserted by `extract_text_with_tables`), not document content. Any
+section with two or more embedded tables repeats them often enough to trip
+the generic frequency-based boilerplate rule, silently destroying
+table-boundary information that a later chunking step would need.
+
+**Fix:** exempt these two literal strings from `strip_boilerplate`
+regardless of repeat count. Verified against a synthetic case that the
+markers now survive while genuinely repeated content (e.g. footer lines)
+still gets stripped, then confirmed against real data: near-duplicate pairs
+dropped from 970 to 966 after the fix (a handful of pairs that previously
+matched partly on now-preserved table markers no longer cross the
+threshold) — the expected signature of a correct fix, not a regression.
+
+## Issue 13 — item_id collision between 10-K and 10-Q under the same Part II prefix
+
+**Found during:** report-back review, cross-checking the full `item_id`
+count breakdown against expected totals by hand.
+
+**Symptom:** `II-5` = 89 but there are only 72 10-Ks (89 − 72 = 17, fitting
+inside the 21 10-Qs); `II-6` = 24 but there are only 21 10-Qs (24 − 21 = 3
+extra from 10-Ks). No crash, no missing content — every record still had
+the correct `form` field — but two unrelated disclosure types were sharing
+one `item_id`.
+
+**Root cause:** 10-K Part II (Items 5-9C, from Issue 2's fixed lookup table)
+and 10-Q Part II (Items 1-6, from Issue 2's occurrence-counting rule) both
+use the `II-` prefix. The two ranges overlap exactly at Items 5 and 6: a
+10-K's `II-5` is "Market for Registrant's Common Equity"; a 10-Q's `II-5` is
+"Other Information" — different disclosures, same label. (The 3 extra `II-6`
+10-K records turned out to be legitimate, not a bug: CFG and Corsair both
+still restate "Item 6. [Reserved]" as a formality even though the SEC
+eliminated the requirement in 2021.)
+
+**Fix:** namespace `item_id` by form type at the point records are written
+(`"10-K:II-5"` vs. `"10-Q:II-5"`), making the id unambiguous on its own
+rather than relying on every downstream script to also filter on `form`.
+Verified as a pure relabeling with no content change: total records (1607)
+and near-duplicate pair count (966) were identical before and after.
+
+## Issue 14 — JPM's 10-Q never restates Part I's Item 1 or Item 2 at all
+
+**Found during:** report-back review, investigating why 3 of 21 10-Qs were
+missing an `II-6` (Exhibits) record. The obvious guess — "Item 6 is
+genuinely short, same as the Issue-checked Item 2/Properties case" — didn't
+hold up: Item 6 in a 10-Q is structurally mandatory (it must at least list
+certification exhibits), so it can't be legitimately trivial. Tracing it
+showed the real symptom was different: all 3 affected filings had *every*
+item labeled under `I-`, with zero `II-` items at all, even though the raw
+HTML clearly contained well-formed, correctly-styled Part II headings
+(confirmed via the same underline-detection signal that already worked for
+other JPM items).
+
+**Root cause:** the Part I/II boundary for 10-Qs is detected by the
+*second* occurrence of raw item_id "1" (Issue 2). Tracing the raw sections
+list for an affected filing showed only **one** "1" existed before any
+dedup or Part-assignment ran: Part II's "Item 1. Legal Proceedings." A
+targeted search of the raw HTML for "Item 1"/"Item 2" confirmed why — JPM's
+10-Q TOC lists Part I's "Item 1."/"Item 2." normally (correctly excluded,
+not bold/underlined), but the **real body never restates them**. JPM jumps
+straight into its own custom sub-headings ("NOTES TO CONSOLIDATED FINANCIAL
+STATEMENTS," etc.) without ever literally writing "Item 1. Financial
+Statements" or "Item 2. ...Analysis" anywhere. Only Part II's Items 1 and 2
+exist as real, detectable headings. With Part I's "1" never occurring, the
+occurrence-counting rule never fires, so Part II's entire block (Items 1A
+through 6) gets mislabeled as a continuation of Part I.
+
+**Resolution:** same category as Issue 11 (INTC) — not a styling or
+detection bug, a genuine absence of the text pattern every fix in this log
+relies on. Unlike INTC, this doesn't block the whole filing: items 3
+through 6 position correctly regardless of the Part I/II mislabeling bug,
+since Issue 2's `TENK_PART_MAP`-equivalent reasoning for 10-Qs depends only
+on the "1" trigger, not on 1/2 being found individually. **Practical
+consequence:** Part I's Items 1 and 2 (Financial Statements and MD&A —
+typically the bulk of a 10-Q's actual content) have no heading to split on
+for these 3 JPM 10-Qs, so that content is absorbed into the `FRONT` section
+rather than its own records. Not lost, just not segmented. **Decision:**
+document as a known limitation rather than build further infrastructure —
+JPM is in the dev subset and not easily swapped the way INTC was, and no
+heading-detection approach can split content that was never labeled in the
+source document.
+
 ## Final verification
 
 After all fixes, `I-1` appeared in exactly 84 of 93 filings — matching the
@@ -241,6 +332,13 @@ minus 3 COP and 3 DVN filings using the composite `1-2` id instead of bare
 `1`). The duplicate-key warning list was empty. This exact-match arithmetic,
 rather than "looks about right," was the actual confirmation the pipeline was
 correct — not just quieter.
+
+This checkpoint held up for the core detection logic, but the subsequent
+report-back review (hand-verifying the full `item_id` breakdown, not just
+spot-checking) caught three further issues the arithmetic above didn't
+surface: Issues 12-14. All three were found the same way as everything
+else in this log — by checking real output against an independently
+computed expectation, not by assuming a clean run meant a correct one.
 
 ## Summary table
 
@@ -253,3 +351,6 @@ correct — not just quieter.
 | JPM | Zero detections | No bold styling anywhere; underline (10-Q) or 12pt custom font (10-K) instead | Broadened heading-detection signals |
 | JPM, WMT | Duplicate item_id per filing | Broadened signals also caught cross-reference text quoting a heading verbatim | `href`-exclusion, then an inline-context "no preceding text" check, then a TOC-shape check for JPM's long outline-style TOC |
 | INTC | Zero detections, unfixable | Never restates "Item N" inline; uses a page-number Cross-Reference Index instead | Swapped out of the corpus (→ TXN) |
+| JPM (multi-table sections) | Boilerplate stripper removed real structural markers | `[TABLE]`/`[/TABLE]` repeat often enough to trip the frequency rule | Exempted these two literal strings from stripping |
+| 10-K vs 10-Q, Items 5 & 6 | Two unrelated disclosures sharing one `item_id` | `II-` prefix used by both 10-K Part II (5-9C) and 10-Q Part II (1-6) — overlap at 5/6 | Namespaced `item_id` by form (`10-K:II-5` vs `10-Q:II-5`) |
+| JPM (10-Q only) | Part II mislabeled as Part I for 3 filings | Never restates Part I's "Item 1"/"Item 2" inline, so the occurrence-counting trigger never fires | Documented as a known limitation (unfixable, not detection bug) — affected content absorbed into FRONT |

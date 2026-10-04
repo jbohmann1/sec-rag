@@ -49,6 +49,8 @@ Each filing is split into one record per Item/section. Record schema:
 ```
 ticker, cik, company, form, filing_date, report_date, accession,
 item_id, item_title, text, char_count, content_hash
+
+# item_id is namespaced by form, e.g. "10-K:I-1A", "10-Q:II-1" (see below)
 ```
 
 **Section detection.** Headings are found by scanning for text matching `Item
@@ -98,12 +100,30 @@ legitimate, not detector errors.
 breakdown confirms the pipeline is internally consistent: `I-3` (Legal
 Proceedings) = 93/93, since every filing has one regardless of form type or
 combined-item filers; `I-1` = 87/93 exactly matches 93 minus COP's and DVN's
-6 combined-item filings. Lower counts for items like `I-4` (Mine Safety
-Disclosures, often just "Not applicable.") reflect the same `len(cleaned) <
-50` short-section-drop behavior already documented from Step 1.4 testing,
-not a new issue. A sample record (BAC, Item III-13, 225 chars — short
-because it's legitimately incorporated by reference to the Proxy Statement)
-confirmed correct schema and metadata.
+6 combined-item filings. `I-2` (Properties) was initially 82/93 — the
+remaining 5-filing gap traced to ACM (both years) and EA (all three years)
+consistently, not randomly, pointing to the same `len(cleaned) < 50`
+short-section-drop behavior already documented for AAPL's Item 9: both are
+asset-light businesses whose Properties disclosure is apparently minimal
+enough to fall under the keep threshold every year. A sample record (BAC,
+Item III-13, 225 chars — short because it's legitimately incorporated by
+reference to the Proxy Statement) confirmed correct schema and metadata.
+
+**`item_id` namespacing fix.** Found a real schema ambiguity: 10-K Part II
+(Items 5-9C) and 10-Q Part II (Items 1-6, since Part II renumbers from 1 per
+the Issue 2 rule in the debugging log) both use the `II-` prefix, colliding
+at `II-5` and `II-6` specifically — two unrelated disclosure types sharing
+one id. Confirmed on real data: `II-5` = 89 (72 from 10-Ks' "Market for
+Registrant's Common Equity" + 17 from 10-Qs' "Other Information"); `II-6` =
+24 (18 from 10-Qs' "Exhibits" + 6 from 10-Ks' "[Reserved]" — some filers
+like CFG and Corsair still restate this item as a formality even though SEC
+eliminated the requirement in 2021, which is legitimate content, not a bug).
+**Fixed by namespacing `item_id` with form type** (`10-K:II-5` vs.
+`10-Q:II-5`), making the id unambiguous on its own rather than relying on
+every downstream script to also filter on `form`. This is a schema change —
+**re-run `clean_process.py` on top of this version if you have older
+`records.jsonl` output**, since old and new item_id formats aren't
+compatible.
 
 **INTC follow-up:** confirmed directly against Intel's real FY2023 10-K
 (fetched from SEC.gov) that the SEC-standard phrase "General development of
@@ -131,8 +151,35 @@ gone from the stripped-lines list, leaving only the lower-stakes items (a
 `'Part I'` running header, stray bullet/dash glyphs from list markers) that
 don't need further action.
 
+**Known limitation: JPM's 10-Q never restates Part I's Item 1 or Item 2.**
+Investigating why 3 of 21 10-Qs were missing an `II-6` (Exhibits) record —
+checked rather than assumed, since Item 6 is structurally mandatory and
+can't legitimately be trivial, unlike the I-2/Properties case above — found
+a different and genuinely unfixable gap: JPM's 10-Q lists "Item 1."/"Item
+2." in its Table of Contents as expected, but the real body never restates
+them before diving into its own custom sub-headings ("NOTES TO CONSOLIDATED
+FINANCIAL STATEMENTS," etc.). Only Part II's Items 1 and 2 exist as real,
+detectable headings, so the occurrence-counting rule that detects the Part
+I/II boundary (two occurrences of raw item "1") never fires, and the entire
+Part II block ends up mislabeled under the `I-` prefix for these 3 filings.
+Same category as the INTC exclusion — not a detection bug, a genuine
+absence of the text pattern this pipeline relies on. Unlike INTC, this
+doesn't block the whole filing (Items 3-6 still position correctly); the
+practical consequence is that Part I's Items 1 and 2 (Financial Statements
+and MD&A — typically the bulk of a 10-Q) have no heading to split on for
+these 3 filings, so that content is absorbed into `FRONT` rather than its
+own records. **Documented rather than fixed**, since JPM is in the dev
+subset and not easily swapped the way INTC was, and no heading-detection
+approach can split content that source document never labeled.
+
 ## Status
 Week 1, Step 1.4 - complete. All report-back checklist items answered: runs
 cleanly on all 93 filings, one row per section, boilerplate/near-duplicate
-spot-checks done (one real false-positive bug found and fixed), 10-K/A
-overlap check closed out, full item breakdown and sample record captured.
+spot-checks done (one real false-positive bug found and fixed: `[TABLE]`
+markers), 10-K/A overlap check closed out, full item breakdown and sample
+record captured, I-2 gap explained (known short-section-drop behavior, not
+a new bug), the `II-5`/`II-6` form-collision schema ambiguity found and
+fixed via form-namespaced `item_id` (verified against real data), and
+JPM's 10-Q Part I gap investigated and documented as a known, unfixable
+limitation (3 filings, content absorbed into FRONT rather than lost).
+Full debugging narrative for all 14 issues found: `docs/step1_4_debugging_log.md`.
