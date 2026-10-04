@@ -82,12 +82,57 @@ and a per-filer approach wouldn't generalize to companies not yet inspected.
 **Near-duplicates.** Flagged via MinHash over 3-word shingles at a 0.7
 similarity threshold, tuned against a synthetic test case after an initial
 5-word/0.8 configuration failed to catch a realistic near-duplicate pair.
-Confirmed working correctly on real data: it correctly identifies a 10-Q's
-Part II "Legal Proceedings" section as near-identical to the same fiscal
-year's 10-K Part I "Legal Proceedings" section (both are the same real-world
-disclosure, filed under different Item numbers by convention), and separately
-flags AAPL's cover page and "Properties" disclosure as reused nearly verbatim
-year over year — both legitimate, not detector errors.
+The final run over the full 93-filing corpus found **966 near-duplicate
+section pairs** (970 before the `[TABLE]`/`[/TABLE]` boilerplate fix below —
+a handful of pairs that partly matched on now-preserved table markers no
+longer cross the threshold, as expected). Spot-checked and confirmed working
+correctly on real data:
+it correctly identifies a 10-Q's Part II "Legal Proceedings" section as
+near-identical to the same fiscal year's 10-K Part I "Legal Proceedings"
+section (both are the same real-world disclosure, filed under different
+Item numbers by convention), and separately flags AAPL's cover page and
+"Properties" disclosure as reused nearly verbatim year over year — both
+legitimate, not detector errors.
+
+**Report-back results (final run, 93 filings, 1607 records).** Full `item_id`
+breakdown confirms the pipeline is internally consistent: `I-3` (Legal
+Proceedings) = 93/93, since every filing has one regardless of form type or
+combined-item filers; `I-1` = 87/93 exactly matches 93 minus COP's and DVN's
+6 combined-item filings. Lower counts for items like `I-4` (Mine Safety
+Disclosures, often just "Not applicable.") reflect the same `len(cleaned) <
+50` short-section-drop behavior already documented from Step 1.4 testing,
+not a new issue. A sample record (BAC, Item III-13, 225 chars — short
+because it's legitimately incorporated by reference to the Proxy Statement)
+confirmed correct schema and metadata.
+
+**INTC follow-up:** confirmed directly against Intel's real FY2023 10-K
+(fetched from SEC.gov) that the SEC-standard phrase "General development of
+business" appears exactly once in the entire document, inside the Cross-
+Reference Index appendix itself. Intel's own Table of Contents lists its
+real page-3 section as **"Introduction to Our Business"** — different
+wording entirely — confirming this isn't a missing-heading parsing artifact
+but a deliberate choice: Intel's narrative never restates SEC Item language
+inline, and only the end-of-document index translates between the two
+vocabularies.
+
+**Boilerplate stripper false-positive check:** tested against real long
+sections (AAPL, JPM, GS, RBLX, COST). AAPL's Item 1A was clean across all
+three years — no legitimately-repeated subheading was wrongly dropped.
+However, JPM's multi-table sections revealed a real bug: the pipeline's own
+`[TABLE]`/`[/TABLE]` structural markers were being stripped as boilerplate,
+since sections with several embedded tables repeat them often enough to
+trip the generic frequency rule — silently destroying table-boundary
+information needed for chunking. **Fixed:** these two literal markers are
+now exempted from boilerplate stripping regardless of repeat count. Verified
+the fix preserves the markers while still correctly stripping genuinely
+repeated content (e.g. footer lines) — and confirmed against the real corpus:
+re-running the false-positive check shows JPM's `[TABLE]`/`[/TABLE]` entries
+gone from the stripped-lines list, leaving only the lower-stakes items (a
+`'Part I'` running header, stray bullet/dash glyphs from list markers) that
+don't need further action.
 
 ## Status
-Week 1, Step 1.4 - cleaning, metadata extraction and near-duplicate detection complete
+Week 1, Step 1.4 - complete. All report-back checklist items answered: runs
+cleanly on all 93 filings, one row per section, boilerplate/near-duplicate
+spot-checks done (one real false-positive bug found and fixed), 10-K/A
+overlap check closed out, full item breakdown and sample record captured.

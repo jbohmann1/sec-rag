@@ -305,6 +305,11 @@ def strip_boilerplate(text, min_repeats=2):
         s = line.strip()
         if not s:
             return False
+        if s in ("[TABLE]", "[/TABLE]"):
+            return False  # our own structural markers, not document content --
+            # sections with multiple embedded tables repeat these often enough
+            # to otherwise trip the generic frequency rule below, silently
+            # destroying table-boundary information needed for chunking
         if PAGE_NUMBER_RE.match(s):
             return True
         if TOC_RE.match(s):
