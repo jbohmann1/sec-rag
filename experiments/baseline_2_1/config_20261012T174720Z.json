@@ -1,0 +1,24 @@
+{
+  "run": "20261012T174720Z",
+  "generation_model": "claude-haiku-4-5-20251001",
+  "top_k": 5,
+  "max_tokens": 1000,
+  "prompt_version": "v1",
+  "system_prompt": "You answer questions about SEC filings using only the provided context chunks. Rules:\n1. Answer ONLY using information in the provided chunks. Do not use outside knowledge.\n2. Every factual claim must end with a citation in the form [chunk_id].\n3. If the chunks don't contain enough information to answer, say so explicitly rather than guessing. Do not fill gaps with plausible-sounding numbers.\n4. Be concise. Do not restate the question.",
+  "price_per_mtok": {
+    "input": 1.0,
+    "output": 5.0
+  },
+  "index": {
+    "built_at": "2026-10-12T17:37:53+00:00",
+    "model": "BAAI/bge-small-en-v1.5",
+    "query_prefix": "Represent this sentence for searching relevant passages: ",
+    "normalized": true,
+    "n_chunks": 17042,
+    "dim": 384,
+    "max_seq_length": 512,
+    "chunking": "token-based, max 500 tokens, 50-token overlap (chunk.py)",
+    "embed_seconds": 1560.3
+  },
+  "questions_file": "experiments\\baseline_2_1\\questions.txt"
+}

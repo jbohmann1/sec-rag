@@ -226,15 +226,122 @@ between them):
 
 **Note for Step 3.2:** this token limit and tokenizer are specific to
 BGE-small. Any embedding model comparison needs its own token-length
-regression check (`test.py`) re-run per model, not an assumption that
-whatever passed for BGE still holds.
+regression check (`checks/check_token_length.py`) re-run per model, not an
+assumption that whatever passed for BGE still holds.
+
+## Baseline Retrieval and Generation (Step 2.1)
+`build_index.py` embeds all 17,042 chunks with BAAI/bge-small-en-v1.5
+(guards against over-length chunks before embedding, times the run, and
+writes `data/index/index_meta.json` recording the config); `query_baseline.py`
+retrieves top-5 by cosine similarity and generates an answer with
+`claude-haiku-4-5-20251001`, citing chunk IDs and verifying every citation
+actually exists in the retrieved set. A `--file` batch mode logs each
+run's config, retrieved chunk IDs/scores, and full answers to
+`experiments/baseline_2_1/`.
+
+**Performance.** Indexing: 17,042 chunks in 26.0 minutes on CPU (~11
+chunks/sec) — this sets the real cost of re-embedding for every Week 3
+chunking experiment, which is why those will run on the 7-company dev
+subset (~5 min each) rather than the full corpus, per the guide's
+suggested workflow. Retrieval: 19ms once warm (the first query's 3.3s was
+model load). Generation: 2.05s median — the LLM call is effectively all of
+the end-to-end latency. Cost: $0.0042/query, so a 200-question eval set
+costs under $1 per configuration — most of the $50 budget will go toward
+Step 2.4's judge calibration, not bulk generation.
+
+**Spot-check (8 questions, qualitative — not a metrics run; that's Step
+2.4).** 0 fabricated citations across all 8. 2 correct abstentions
+(a company genuinely not in the corpus; a fiscal year not yet filed). 1
+false abstention (Apple: right filing retrieved, not the chunk with the
+actual total — an honest "I don't know" with a real retrieval miss behind
+it, not a hallucination). 1 wrong answer with fully valid citations
+(Walmart) — the standout finding of this run.
+
+**The Walmart case.** The answer stated "fiscal 2025 ending January 31,
+2025" and cited figures that are actually Walmart's fiscal 2024 numbers
+from a chunk whose real period end is 2024-01-31. The citation check
+passed — the cited chunk genuinely was retrieved — but the generated
+*claim* doesn't match what that chunk actually says. **This is the
+concrete demonstration of why citation validity and faithfulness are
+different checks**: a valid citation only proves the chunk existed in the
+retrieved set, not that the answer is actually grounded in it. This is
+exactly the gap Step 2.4's faithfulness judge exists to catch, and now
+there's a real, hand-verified example of the failure mode it needs to
+detect, ahead of building that judge.
+
+**BofA CET1 ratio — verified, not just plausible.** The model selected
+the FY2025 chunk over a higher-ranked FY2024 chunk and reported 11.4%.
+Manually traced through the table's regulatory-minimum footnotes (10.0%
+minimum = 4.5% + 3.0% + 2.5% buffer, matching the buffer disclosed for
+December 31, 2025) to confirm the figure, ratio, year, and approach
+(Standardized, BofA's binding ratio) are all correct. **Open question this
+exposed:** the table's year/column labels weren't visible within the
+retrieved chunk itself — they may sit in an adjacent chunk (chunk 52). If
+so, the model got the right answer without having direct access to the
+label that justifies it, which would mean this answer is correct by
+inference or luck rather than by grounded evidence. Added as a distinct
+failure hypothesis from Apple's "table embeds poorly" case: this one is
+about a retrieved chunk not being self-contained, not about retrieval
+missing it entirely.
+
+**Failure hypotheses carried into Week 3-4 (evidenced, not speculative —
+each has a real example from this run):**
+- **Wrong period retrieved** (Walmart; BofA's top-ranked chunk was also
+  the wrong year) — embeddings have no explicit sense of "most recent."
+  Target: Step 4.1 metadata filtering.
+- **10-Qs crowding out 10-Ks on annual questions** (ExxonMobil: 4 of 5
+  retrieved chunks were quarterly; Apple: 2 of 5) — quarterly
+  "compared with the prior-year period" phrasing apparently matches
+  year-over-year query language better than a 10-K's annual framing does.
+- **Cross-filing near-duplicate chunks crowding out diversity** (EA: 3 of
+  5 slots held the same risk-factor language from 3 different 10-Qs, all
+  scoring 0.749) — Week 1's MinHash dedup only caught duplicates *within*
+  a filing, not the same boilerplate reused verbatim *across* separate
+  quarterly filings. Candidate for retrieval-time suppression in Step 3.1.
+- **Wrong company on generic topics** (Dollar General: 3 of 5 retrieved
+  chunks were Costco's and Corsair's — generic supply-chain risk language
+  reads nearly identically across unrelated retailers/manufacturers).
+- **Financial-statement totals not retrieved** (Apple's false abstention)
+  — hypothesis: headline numbers in dense tables may embed poorly as
+  dense vectors; candidate test in Step 3.3 (BM25/hybrid).
+  - **Related, more specific finding (BofA):** even when the right table
+    *is* retrieved, its year/column labels may not be in the same chunk —
+    a chunking-boundary problem distinct from the embedding-quality
+    hypothesis above.
+- **Compressed BGE similarity scores** — an irrelevant chunk (Nvidia
+  question) scored 0.737, nearly identical to a correct hit's score. A
+  known characteristic of BGE-family models. **Consequence: no raw
+  cosine-similarity threshold can be used for abstention decisions** —
+  that judgment has to come from the LLM itself (or, later, a reranker),
+  not the retrieval score.
+
+## Known limitation: word-joining in parsed text (Issue #17)
+128 / 17,042 chunks (0.75%) contain two words run together with no space
+(e.g. `"delayof"`, `"business,which"`), traced to `bs4_structured`
+producing no separator between two adjacent inline HTML elements that had
+no text node between them in the source. By rate, Unity (2.65%) and Ross
+Stores (2.10%) are the most affected filers, not the largest filer by raw
+count (JPM, 1.08%) — that distinction matters for where to look if this is
+ever revisited. Deliberately deferred rather than fixed in Step 2.1 — low
+prevalence corpus-wide, and a proper fix touches Step 1.4's HTML
+extraction, which has already been hardened against 15 filer-specific
+issues. Revisit if Week 4's error analysis shows it actually degrading
+results, particularly for Step 3.3's BM25 exact-term matching, which is
+more sensitive to this than dense embeddings are. Full account, including
+the per-ticker breakdown:
+[`docs/step2_1_debugging_log.md`](docs/step2_1_debugging_log.md).
 
 ## Status
-Week 2, Step 2.1 in progress. Week 1 complete through Step 1.4 (see above).
-Chunking rewritten to be token-based and verified on the real corpus
-(17,042 chunks, 0 over the embedding model's token limit — see Chunking
-section above). `build_index.py` (embedding + flat cosine-similarity
-index) and `query_baseline.py` (retrieval + generation with citation
-verification) are written but not yet run against real data.
-Full debugging narrative for Week 1's 15 issues: `docs/step1_4_debugging_log.md`.
-Step 2.1's chunking issue: `docs/step2_1_debugging_log.md`.
+Week 2, Step 2.1 complete. Chunking is token-based and verified (17,042
+chunks, 0 over the embedding model's limit — Issue #16). Baseline index
+and query pipeline run end to end with real data: 0 fabricated citations,
+real failure patterns captured and evidenced (not hypothetical) ahead of
+Week 4's formal error analysis. One known, deferred data-quality
+limitation (Issue #17, word-joining, 0.75% of chunks corpus-wide). Full
+debugging narratives: `docs/step1_4_debugging_log.md` (Week 1, 15 issues),
+`docs/step2_1_debugging_log.md` (Step 2.1, issues #16-17).
+
+Next: Step 2.2, designing the gold eval set. One decision already made
+ahead of that step: gold sources will point to sections (ticker, period,
+item_id), not chunk IDs, so the eval set survives Week 3's chunking
+experiments without needing to be rebuilt each time chunk boundaries change.

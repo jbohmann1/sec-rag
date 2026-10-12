@@ -62,16 +62,86 @@ still well under BGE's real 512 hard limit, so nothing truncates, but the
 couple of tokens in practice. Worth remembering if the safety margin is
 ever tightened.
 
-**Regression check:** `test.py` — a token-length check run directly over
-`data/processed/chunks.jsonl` (not over the original offsets, over the
-actual final chunk text, which is what caught the 504 discrepancy above).
-Expected output: `0/N chunks exceed 512 tokens`. Re-run this whenever the
-embedding model changes (relevant for the Step 3.2 model comparison,
-where a different model will have its own token limit and its own
-tokenizer).
+**Regression check:** `checks/check_token_length.py` — a token-length
+check run directly over `data/processed/chunks.jsonl` (not over the
+original offsets, over the actual final chunk text, which is what caught
+the 504 discrepancy above). Expected output: `0/N chunks exceed 512
+tokens`. Re-run this whenever the embedding model changes (relevant for
+the Step 3.2 model comparison, where a different model will have its own
+token limit and its own tokenizer).
 
 **Lesson:** when a limit is defined in one component's units, measure it
 in those units, not an approximation of them. The same principle that
 caught Week 1's heading-detection issues (verify against the real
 artifact, not an assumption about it) applies just as much to numeric
 limits as to text patterns.
+
+---
+
+## Issue #17 — Adjacent HTML text nodes joined without whitespace
+
+**Symptom:** fluent-looking generation output occasionally contains two
+words run together with no space — observed directly in two Step 2.1
+spot-check answers: `"delayof"` (EA) and `"business,which"` (Dollar
+General). Not a chunking or embedding bug; present in the source chunk
+text itself.
+
+**Investigation:** a regex scan over `data/processed/chunks.jsonl`
+(`checks/check_whitespace.py`) for two specific shapes — `[a-z],[a-z]` (a
+comma with no following space, as in `"business,which"`) and
+`[a-z]\.[A-Z][a-z]` (a period with no following space before a
+capitalized word, as in `"end.The"`) — found **128 / 17,042 chunks
+affected (0.75%)**. Per-ticker breakdown, raw count and rate:
+
+| Ticker | Count | Rate |
+|---|---|---|
+| JPM | 29/2683 | 1.08% |
+| U | 13/490 | **2.65%** |
+| ACM | 13/745 | 1.74% |
+| COP | 9/738 | 1.22% |
+| BAC | 8/1273 | 0.63% |
+| WMT | 6/717 | 0.84% |
+| DG | 6/584 | 1.03% |
+| FLR | 6/435 | 1.38% |
+| ROST | 6/286 | **2.10%** |
+| AAPL | 5/422 | 1.18% |
+
+JPM's raw count is highest, but that's substantially a volume artifact —
+it's the largest single filer in the corpus by chunk count (2,683 chunks,
+already flagged in `download.py`'s comments as a "heavy filer" back in
+Step 1.2). By rate, **Unity (2.65%) and Ross Stores (2.10%) are actually
+the most affected**, not JPM. The raw-count list alone would have pointed
+investigation at JPM's HTML specifically; the rate-normalized view says
+Unity and Ross Stores deserve equal attention if this is ever revisited.
+
+**Likely cause:** `bs4_structured`'s `get_text(separator="\n")` call
+(Step 1.3/1.4) inserts a newline between block-level elements, but two
+adjacent *inline* elements in the source HTML with no text node between
+them — e.g. `<span>...delay</span><span>of...</span>` — produce no
+separator at all, so their text concatenates directly. The comma/period
+regex only catches cases where punctuation happens to sit at the join
+point; `"delayof"` (two lowercase words, no punctuation) is the same root
+cause but structurally undetectable by this pattern — there's no
+character to anchor a regex on, so the true affected rate is likely
+somewhat higher than 0.75%.
+
+**Decision: deferred, not fixed, for now.** At well under 1% of chunks
+corpus-wide (worst single filer at 2.65%), this is a real but
+low-prevalence data quality issue. Fixing it properly means re-walking
+Step 1.4's HTML extraction to insert a space (not just a newline) between
+any two adjacent inline elements — a change to the parser that's already
+been hardened against 15 filer-specific issues, not one to make casually
+this late in Step 2.1 without a clearer sense of actual impact. Deferred
+to reconsider if it shows up as a meaningful factor in Week 4's error
+analysis. Specific hypothesis to test then: this should hurt Step 3.3's
+BM25 exact-term matching more than it hurts dense embeddings, since dense
+vectors are more robust to minor tokenization noise than exact sparse
+term matches are.
+
+**Lesson:** a word-joining defect like this doesn't show up in automated
+checks the way a token-length violation does (Issue #16) — it was only
+caught by a human reading real generation output closely. Worth
+deliberately re-skimming raw chunk text occasionally, not just trusting
+automated checks, since the two catch different failure classes. Also
+worth normalizing by volume before trusting a raw-count ranking — the
+same principle that mattered for `II-5`/`II-6` counts back in Week 1.

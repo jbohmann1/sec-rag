@@ -1,0 +1,19 @@
+# Step 2.1 spot-check questions. One per line; lines starting with # are ignored.
+# Qualitative only -- this is NOT the eval set (that's Step 2.2-2.3).
+
+# simple fact
+What was Apple's total net sales in fiscal 2024?
+# number from a financial table
+What were Walmart's total revenues and operating income in its most recent fiscal year?
+# two-year comparison
+How did ExxonMobil's net income change between its two most recent fiscal years?
+# similar-company confusion test (JPM vs BAC)
+What was Bank of America's common equity tier 1 (CET1) capital ratio at the end of its most recent fiscal year?
+# vague / paraphrased
+What does Electronic Arts say could hurt its business if live services games underperform?
+# risk factor, different sector
+What supply chain risks does Dollar General describe?
+# unanswerable: company not in corpus
+What was Nvidia's data center revenue in fiscal 2025?
+# unanswerable: future period
+What was Microsoft's revenue in fiscal 2030?

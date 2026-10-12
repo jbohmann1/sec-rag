@@ -1,0 +1,11 @@
+{
+  "built_at": "2026-10-12T17:37:53+00:00",
+  "model": "BAAI/bge-small-en-v1.5",
+  "query_prefix": "Represent this sentence for searching relevant passages: ",
+  "normalized": true,
+  "n_chunks": 17042,
+  "dim": 384,
+  "max_seq_length": 512,
+  "chunking": "token-based, max 500 tokens, 50-token overlap (chunk.py)",
+  "embed_seconds": 1560.3
+}
