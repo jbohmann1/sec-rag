@@ -54,7 +54,7 @@ item_id, item_title, text, char_count, content_hash
 ```
 
 **Section detection.** Headings are found by scanning for text matching `Item
-\d+[A-Za-z]?[.\u2014\u2013:]` inside elements styled as headings — the
+\d+[A-Za-z]?[.—–:]` inside elements styled as headings — the
 workaround for EDGAR's lack of semantic heading tags noted in Step 1.3. A
 second pattern also catches combined "Items N and M." headings (an oil & gas
 convention — see below). "Heading-styled" turned out to mean different things
@@ -65,7 +65,7 @@ chronological account. Summary:
 
 | Filer(s) | Quirk | Fix |
 |---|---|---|
-| COST, COP | Real heading uses an em dash, not a period, between item number and title (`Item 1\u2014Business`) | Broadened the separator pattern to accept a period, em dash, en dash, or colon |
+| COST, COP | Real heading uses an em dash, not a period, between item number and title (`Item 1—Business`) | Broadened the separator pattern to accept a period, em dash, en dash, or colon |
 | DVN, COP | Combine Business and Properties into one heading, `"Items 1 and 2."` | A second regex producing a composite id, `1-2` |
 | BAC, CRSR, MSFT | Table of Contents bold-labels its own "PART I/II/III/IV" dividers, leaving naive Part-tracking stuck on whichever Part was listed last | Replaced HTML-based Part detection entirely with a fixed item-number-to-Part lookup for 10-Ks, and an occurrence-counting rule for 10-Qs (Part II starts the second time "Item 1" appears, since Part I and Part II both number their items from 1) |
 | JPM | Uses no bold styling anywhere — 10-Ks use a larger custom font-size instead, 10-Qs use underline | Broadened heading detection to also treat underline and font-size ≥ 12pt as heading-like |
@@ -193,18 +193,48 @@ silently drop real content in any filing where Part II's one-liner happens
 to be longer than 50 characters but shorter than the old 150-character
 threshold, which just doesn't occur among this corpus's 93 filings.
 
+## Chunking (Step 2.1)
+Each of the 1607 Step 1.4 section records is split into fixed-size chunks
+for embedding. Chunking is **token-based, using the embedding model's own
+tokenizer** (BAAI/bge-small-en-v1.5), not a word-count approximation:
+windows of at most 500 tokens (512 minus 2 special tokens minus a safety
+margin), 50-token overlap, sliced from the original text at the
+tokenizer's character offsets so each chunk is an exact substring of its
+section — newlines and table rows are preserved rather than flattened.
+
+The first version chunked by word count (512 words, 50-word overlap)
+instead, on the assumption that words were a reasonable proxy for tokens.
+They aren't, for this corpus: financial text runs well above one token per
+word, and tables (numbers, `$`, `%`, `|` separators) run highest of all.
+Measuring the actual token length of the resulting chunks found **89% of
+them (10,985 of 12,302) exceeded BGE's 512-token limit** — silently
+truncated by `sentence-transformers` at embedding time with no error, no
+warning, median chunk losing ~22% of its text from the search index, worst
+case (a table) losing about two-thirds. Fixed by chunking with the
+embedding model's real tokenizer: 1607 sections now produce **17,042
+chunks** (789 sections split, up from 675 under the word-based version),
+**0 of 17,042 exceeding the token limit** (median 502, max 504). The
+2-token gap above the 502-token design target is a known effect of subword
+tokenization — re-tokenizing a chunk in isolation after slicing it out by
+character offset doesn't always reproduce the exact token boundaries it had
+inside the full document — not a bug; 504 is still comfortably under BGE's
+real 512 hard limit. Full account, including why the earlier synthetic
+tests didn't catch this (each component — chunking overlap, retrieval
+ranking — was correct in isolation; the bug was in the unit mismatch
+between them):
+[`docs/step2_1_debugging_log.md`](docs/step2_1_debugging_log.md).
+
+**Note for Step 3.2:** this token limit and tokenizer are specific to
+BGE-small. Any embedding model comparison needs its own token-length
+regression check (`test.py`) re-run per model, not an assumption that
+whatever passed for BGE still holds.
+
 ## Status
-Week 1, Step 1.4 - complete. All report-back checklist items answered: runs
-cleanly on all 93 filings, one row per section, boilerplate/near-duplicate
-spot-checks done (one real false-positive bug found and fixed: `[TABLE]`
-markers), 10-K/A overlap check closed out, full item breakdown and sample
-record captured, I-2 gap explained (known short-section-drop behavior, not
-a new bug), the `II-5`/`II-6` form-collision schema ambiguity found and
-fixed via form-namespaced `item_id` (verified against real data), and
-JPM's 10-Q Part I gap investigated and documented as a known, unfixable
-limitation (3 filings, content absorbed into FRONT rather than lost), and a
-genuine dedup-logic bug found and fixed (verified to have zero net effect
-on this corpus's final output, confirmed rather than assumed, by tracing
-the exact pipeline stage where the separate 50-char filter independently
-catches the same trivial content).
-Full debugging narrative for all 15 issues found: `docs/step1_4_debugging_log.md`.
+Week 2, Step 2.1 in progress. Week 1 complete through Step 1.4 (see above).
+Chunking rewritten to be token-based and verified on the real corpus
+(17,042 chunks, 0 over the embedding model's token limit — see Chunking
+section above). `build_index.py` (embedding + flat cosine-similarity
+index) and `query_baseline.py` (retrieval + generation with citation
+verification) are written but not yet run against real data.
+Full debugging narrative for Week 1's 15 issues: `docs/step1_4_debugging_log.md`.
+Step 2.1's chunking issue: `docs/step2_1_debugging_log.md`.
